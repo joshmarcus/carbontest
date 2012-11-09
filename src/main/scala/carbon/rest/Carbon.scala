@@ -8,24 +8,23 @@ import geotrellis._
 import geotrellis.process._
 import geotrellis.raster.op._
 import geotrellis.statistics.op.stat.TiledPolygonalZonalCount
-import geotrellis.raster.CroppedRaster
-import geotrellis.raster.TileLayout
-import geotrellis.raster.TileArrayRasterData
+import geotrellis.raster._
 
 object Carbon {
   val server = TestServer()
 
   def init = {
     // Load and cache tileset for future requests.
+    val uncachedRaster = Raster.loadUncachedTileSet("/var/trellis/carbon", server)
     val raster = Raster.loadTileSet("/var/trellis/carbon", server)
 
     val tileSetRD = raster.data.asInstanceOf[TileArrayRasterData] 
     val tileSums = TiledPolygonalZonalCount.createTileSums(tileSetRD, raster.rasterExtent)
 
-    (raster, tileSums)
+    (raster, uncachedRaster, tileSums)
   }
   
-  val (raster, tileSums) = init
+  val (raster, uncachedRaster, tileSums) = init
 }
 
 /**
@@ -54,6 +53,10 @@ class Carbon {
     @QueryParam("polygon")
     polygonJson:String,
     
+    @DefaultValue("true")
+    @QueryParam("cached")
+    cached:String,
+
     @DefaultValue("4000")
     @QueryParam("limit")
     limit:Int
@@ -61,7 +64,7 @@ class Carbon {
   ):Any = {
     val start = System.currentTimeMillis()
     val server = Carbon.server
-    val raster = Carbon.raster
+    val raster = if (cached == "true") Carbon.raster else Carbon.uncachedRaster
 
     println("Received request.")
     var preCount = System.currentTimeMillis
@@ -69,19 +72,20 @@ class Carbon {
     val pOp = io.LoadPolygonGeoJson(polygonJson)
     val p = Carbon.server.run(pOp)
 
-    //TODO: replace with GetEnvelope
-    val oldPOp = new geotrellis.geometry.Polygon(p.geom, 1, null)
-    val peOp = geotrellis.vector.op.extent.PolygonExtent(oldPOp)
-    val newE, Extent(xmin, ymin, xmax, ymax) = server.run(peOp)
+    val polygonEnvelope = p.geom.getEnvelopeInternal
+     
+    val newExtentOp = extent.CropRasterExtent(
+      extent.GetRasterExtent(raster), 
+      polygonEnvelope.getMinX(),
+      polygonEnvelope.getMinY(),
+      polygonEnvelope.getMaxX(),
+      polygonEnvelope.getMaxY()
+    )
 
-    val newExtentOp = extent.CropRasterExtent(extent.GetRasterExtent(raster), xmin, ymin, xmax, ymax)
     val pExtent = server.run(newExtentOp)
     val croppedRaster = CroppedRaster(raster,pExtent.extent)
 
-    preCount = System.currentTimeMillis
     val countOp = TiledPolygonalZonalCount(p, croppedRaster, Carbon.tileSums, limit) 
-
-    val elapsed = System.currentTimeMillis - start
 
     val count = server.run(countOp)
     val elapsedTotal = System.currentTimeMillis - preCount
