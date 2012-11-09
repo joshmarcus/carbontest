@@ -24,7 +24,7 @@ object MyBuild extends Build {
       "junit" % "junit" % "4.5" % "test",
       "org.eclipse.jetty" % "jetty-webapp" % "8.1.0.RC4",
       "com.sun.jersey" % "jersey-bundle" % "1.11",
-      "com.azavea.geotrellis" %% "geotrellis" % "0.8.0-M4-SNAPSHOT" exclude ("com.typesafe.sbteclipse", "sbteclipse-plugin"),
+      "com.azavea.geotrellis" %% "geotrellis" % "0.8.0-M4d-SNAPSHOT" exclude ("com.typesafe.sbteclipse", "sbteclipse-plugin"),
       "com.codahale" % "jerkson_2.9.1" % "0.5.0"
     ),
 

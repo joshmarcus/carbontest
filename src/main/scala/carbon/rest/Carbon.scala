@@ -7,7 +7,7 @@ import javax.ws.rs.core.{Response, Context}
 import geotrellis._
 import geotrellis.process._
 import geotrellis.raster.op._
-import geotrellis.statistics.op.stat.TiledPolygonalZonalCount
+import geotrellis.statistics.op._ //stat.TiledPolygonalZonalCount
 import geotrellis.raster._
 
 object Carbon {
@@ -19,7 +19,7 @@ object Carbon {
     val raster = Raster.loadTileSet("/var/trellis/carbon", server)
 
     val tileSetRD = raster.data.asInstanceOf[TileArrayRasterData] 
-    val tileSums = TiledPolygonalZonalCount.createTileSums(tileSetRD, raster.rasterExtent)
+    val tileSums = stat.TiledPolygonalZonalCount.createTileSums(tileSetRD, raster.rasterExtent)
 
     (raster, uncachedRaster, tileSums)
   }
@@ -113,6 +113,10 @@ class Carbon {
     @QueryParam("cached")
     cached:String,
 
+    @QueryParam("mode")
+    @DefaultValue("old")
+    mode:String,
+
     @DefaultValue("4000")
     @QueryParam("limit")
     limit:Int
@@ -120,6 +124,8 @@ class Carbon {
   ):Any = {
     val start = System.currentTimeMillis()
     val server = Carbon.server
+    val useOldOp:Boolean = (mode == "old")
+
     val raster = if (cached == "true") Carbon.raster else Carbon.uncachedRaster
 
     println("Received request.")
@@ -141,9 +147,14 @@ class Carbon {
     val pExtent = server.run(newExtentOp)
     val croppedRaster = CroppedRaster(raster,pExtent.extent)
 
-    val countOp = zonal.TiledPolygonalZonalSum(p, croppedRaster, Carbon.tileSums, limit) 
-    val countOp2 = TiledPolygonalZonalCount(p, croppedRaster, Carbon.tileSums, limit) 
-
+    val countOp = if (useOldOp) {
+      println("Using old zonal summary operation.")
+      stat.TiledPolygonalZonalCount(p, croppedRaster, Carbon.tileSums, limit) 
+    } else {
+      println("Using new zonal summary operation.")
+      zonal.TiledPolygonalZonalSum(p, croppedRaster, Carbon.tileSums, limit) 
+    }
+ 
     val count = server.run(countOp)
     val elapsedTotal = System.currentTimeMillis - preCount
     println ("Request duration: " + elapsedTotal)
