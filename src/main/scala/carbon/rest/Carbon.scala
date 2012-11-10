@@ -2,9 +2,11 @@ package carbon
 
 import javax.servlet.http.HttpServletRequest
 import javax.ws.rs.core.Response
-import javax.ws.rs.{GET, Path, DefaultValue, QueryParam}
-import javax.ws.rs.core.{Response, Context}
+import javax.ws.rs.{GET, POST, Path, DefaultValue, QueryParam}
+import javax.ws.rs._
+import javax.ws.rs.core.{Response, Context, MediaType}
 import geotrellis._
+import geotrellis.feature.Polygon
 import geotrellis.process._
 import geotrellis.raster.op._
 import geotrellis.statistics.op._ //stat.TiledPolygonalZonalCount
@@ -39,69 +41,34 @@ object Carbon {
  */
 @Path("/carbon")
 class Carbon {
+  
+  @POST
+  def carbonPost(
+    polygonJson:String
+  ) = {
+    if (polygonJson == null) {
+      Response.serverError().entity("{ \"error\" => 'Carbon server has received an empty request.' }").`type`("application/json").build() 
+    } else {
+    //println("received json: " + polygonJson)
+    //println("received POST request.")
+      carbon(polygonJson, "true", "true", "new", 4000)
+    }
+  }
+
   @GET
   def carbon(
     @DefaultValue("""
-{ "type": "Feature",
-  "bbox": [-180.0, -90.0, 180.0, 90.0],
-  "geometry": {
-    "type": "Polygon",
-    "coordinates": [
-         [
-[-72.930543,46.898706],
-[-72.902698,46.860357],
-[-72.871815,46.870168],
-[-72.850393,46.858237],
-[-72.810643,46.854019],
-[-72.793161,46.860102],
-[-72.765297,46.844318],
-[-72.800504,46.774348],
-[-72.794514,46.750705],
-[-72.766187,46.727758],
-[-72.789089,46.738780],
-[-72.805189,46.727573],
-[-72.796586,46.721733],
-[-72.832722,46.699331],
-[-72.826288,46.694793],
-[-72.840347,46.685318],
-[-72.832356,46.678883],
-[-72.846167,46.669685],
-[-72.833254,46.661096],
-[-72.843643,46.651063],
-[-72.852073,46.646499],
-[-72.866190,46.655543],
-[-72.859196,46.663906],
-[-72.878202,46.673180],
-[-72.909077,46.723968],
-[-72.927004,46.733668],
-[-72.993816,46.745593],
-[-73.011522,46.736313],
-[-72.986998,46.683166],
-[-72.990015,46.661566],
-[-72.964038,46.649692],
-[-72.999340,46.648914],
-[-73.032051,46.653083],
-[-73.064131,46.706726],
-[-73.106851,46.704127],
-[-73.178958,46.750860],
-[-73.169351,46.764523],
-[-73.143754,46.770591],
-[-73.132157,46.786773],
-[-73.132426,46.832920],
-[-73.127298,46.828328],
-[-73.109995,46.835746],
-[-73.106726,46.850777],
-[-73.085312,46.866211],
-[-73.078543,46.886311],
-[-73.043887,46.902038],
-[-73.039422,46.917647],
-[-73.017893,46.918683],
-[-73.008385,46.908864],
-[-72.969103,46.898801],
-[-72.930543,46.898706]
-      ]]
-    }
-  }
+{
+   "type": "MultiPolygon",
+   "coordinates": [
+       [
+           [ [102.0, 2.0], [103.0, 2.0], [103.0, 3.0], [102.0, 3.0], [102.0, 2.0] ]
+       ],
+       [
+           [ [100.0, 0.0], [101.0, 0.0], [101.0, 1.0], [100.0, 1.0], [100.0, 0.0] ],
+           [ [100.2, 0.2], [100.8, 0.2], [100.8, 0.8], [100.2, 0.8], [100.2, 0.2] ]
+       ]
+   ]
 }
 """)
 
@@ -112,6 +79,10 @@ class Carbon {
     @DefaultValue("true")
     @QueryParam("cached")
     cached:String,
+
+    @DefaultValue("true")
+    @QueryParam("multipolygon")
+    multipolygon:String,
 
     @QueryParam("mode")
     @DefaultValue("old")
@@ -128,12 +99,35 @@ class Carbon {
 
     val raster = if (cached == "true") Carbon.raster else Carbon.uncachedRaster
 
-    println("Received request.")
     var preCount = System.currentTimeMillis
 
-    val pOp = io.LoadPolygonGeoJson(polygonJson)
-    val p = Carbon.server.run(pOp)
+    try {
+      val count = if ( multipolygon != "true" ) {
+        val pOp = io.LoadPolygonGeoJson(polygonJson)
+        val p1 = Carbon.server.run(pOp)
+        val count = foo(p1, useOldOp, raster, limit)
+        count 
+      } else {
+        val listPOp =  io.LoadMultiPolygonGeoJson(polygonJson)
+        val plist = Carbon.server.run(listPOp)
+        val count = plist.foldLeft( 0L ) ( (sum:Long, p) => sum + foo(p, useOldOp, raster, limit) ) 
+        //val count = foo(plist(0), useOldOp, raster, limit)
+        count
+      }
 
+      val elapsedTotal = System.currentTimeMillis - preCount
+      println ("Request duration: " + elapsedTotal)
+
+      val data = "{ \"carbon_count\": %d, \"elapsed\": %d }".format(count, elapsedTotal)
+      Response.ok(data).`type`("application/json").build()
+    } catch {
+      case e: Exception => { Response.serverError().entity("{ \"error\" => 'Polygon request was invalid.' }").`type`("application/json").build() 
+      }
+    } 
+  }
+
+  def foo(p:Polygon[Unit], useOldOp:Boolean, raster:Raster, limit:Int) = {
+    val server = Carbon.server
     val polygonEnvelope = p.geom.getEnvelopeInternal
      
     val newExtentOp = extent.CropRasterExtent(
@@ -156,10 +150,6 @@ class Carbon {
     }
  
     val count = server.run(countOp)
-    val elapsedTotal = System.currentTimeMillis - preCount
-    println ("Request duration: " + elapsedTotal)
-
-    val data = "{ \"carbon_count\": %d, \"elapsed\": %d }".format(count, elapsedTotal)
-    Response.ok(data).`type`("application/json").build()
+    count
   }
 }
