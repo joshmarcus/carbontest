@@ -50,7 +50,7 @@ class Carbon {
     } else {
       println("received json: " + polygonJson)
       println("received POST request.")
-      carbon(polygonJson, "true", "true", "new", 4000)
+      carbon(polygonJson, "true")
     }
   }
 
@@ -77,16 +77,11 @@ class Carbon {
     
     @DefaultValue("true")
     @QueryParam("cached")
-    cached:String,
+    cached:String
 
-    @DefaultValue("4000")
-    @QueryParam("limit")
-    limit:Int
-    
   ):Any = {
     val start = System.currentTimeMillis()
     val server = Carbon.server
-    val useOldOp:Boolean = (mode == "old")
 
     val raster = if (cached == "true") Carbon.raster else Carbon.uncachedRaster
 
