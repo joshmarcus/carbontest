@@ -11,18 +11,19 @@ import geotrellis.process._
 import geotrellis.raster.op._
 import geotrellis.statistics.op._ //stat.TiledPolygonalZonalCount
 import geotrellis.raster._
+import geotrellis.feature.op.geometry.AsPolygonSet
 
 object Carbon {
   val server = TestServer()
 
   def init = {
     // Load and cache tileset for future requests.
-    var carbonLocation = "/var/geotrellis/data/arg/carbon"
+    var carbonLocation = "/var/geotrellis/carbon_1000"
     val uncachedRaster = Raster.loadUncachedTileSet(carbonLocation, server)
     val raster = Raster.loadTileSet(carbonLocation, server)
 
     val tileSetRD = raster.data.asInstanceOf[TileArrayRasterData] 
-    val tileSums = stat.TiledPolygonalZonalCount.createTileSums(tileSetRD, raster.rasterExtent)
+    val tileSums = zonal.Sum.createTileResults(tileSetRD, raster.rasterExtent)
 
     (raster, uncachedRaster, tileSums)
   }
@@ -32,7 +33,7 @@ object Carbon {
 
 
 /**
- * Demo rest endpoint for Vizzuality
+ * Demo rest endpoint
  *
  * Sum carbon values under polygon provided via geojson
  */
@@ -78,14 +79,6 @@ class Carbon {
     @QueryParam("cached")
     cached:String,
 
-    @DefaultValue("true")
-    @QueryParam("multipolygon")
-    multipolygon:String,
-
-    @QueryParam("mode")
-    @DefaultValue("old")
-    mode:String,
-
     @DefaultValue("4000")
     @QueryParam("limit")
     limit:Int
@@ -100,18 +93,10 @@ class Carbon {
     var preCount = System.currentTimeMillis
 
     try {
-      val count = if ( multipolygon != "true" ) {
-        val pOp = io.LoadPolygonGeoJson(polygonJson)
-        val p1 = Carbon.server.run(pOp)
-        val count = foo(p1, useOldOp, raster, limit)
-        count 
-      } else {
-        val listPOp =  io.LoadMultiPolygonGeoJson(polygonJson)
-        val plist = Carbon.server.run(listPOp)
-        val count = plist.foldLeft( 0L ) ( (sum:Long, p) => sum + foo(p, useOldOp, raster, limit) ) 
-        //val count = foo(plist(0), useOldOp, raster, limit)
-        count
-      }
+      val featureOp = io.LoadGeoJsonFeature(polygonJson)
+      val polygonSetOp = AsPolygonSet(featureOp)
+      val plist = Carbon.server.run(polygonSetOp)
+      val count = plist.foldLeft( 0L ) ( (sum:Long, p) => sum + zonalSum(p, raster)) 
 
       val elapsedTotal = System.currentTimeMillis - preCount
       println ("Request duration: " + elapsedTotal)
@@ -124,30 +109,8 @@ class Carbon {
     } 
   }
 
-  def foo(p:Polygon[Unit], useOldOp:Boolean, raster:Raster, limit:Int) = {
-    val server = Carbon.server
-    val polygonEnvelope = p.geom.getEnvelopeInternal
-     
-    val newExtentOp = extent.CropRasterExtent(
-      extent.GetRasterExtent(raster), 
-      polygonEnvelope.getMinX(),
-      polygonEnvelope.getMinY(),
-      polygonEnvelope.getMaxX(),
-      polygonEnvelope.getMaxY()
-    )
-
-    val pExtent = server.run(newExtentOp)
-    val croppedRaster = CroppedRaster(raster,pExtent.extent)
-
-    val countOp = if (useOldOp) {
-      println("Using old zonal summary operation.")
-      stat.TiledPolygonalZonalCount(p, croppedRaster, Carbon.tileSums, limit) 
-    } else {
-      println("Using new zonal summary operation.")
-      zonal.TiledPolygonalZonalSum(p, croppedRaster, Carbon.tileSums, limit) 
-    }
- 
-    val count = server.run(countOp)
-    count
+  def zonalSum(p:Polygon[_], raster:Raster) = {
+    val sumOp = zonal.Sum(raster, p, Carbon.tileSums) 
+    Carbon.server.run(sumOp)
   }
 }
